@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenFIVS Client</title>
+    <style>
+      body { margin: 0; overflow: hidden; }
+      #overlay {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 10;
+        background: rgba(255,255,255,0.8);
+        padding: 5px;
+        border-radius: 4px;
+        font-family: sans-serif;
+      }
+      #overlay input {
+        width: 200px;
+      }
+    </style>
+</head>
+<body>
+    <div id="overlay">
+      <input id="nameInput" placeholder="Enter your name" />
+      <button id="joinBtn">Join</button>
+    </div>
+    <script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+    <script>
+      let socket;
+      let clientId;
+      const peers = {};
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+      const renderer = new THREE.WebGLRenderer();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+      scene.add(ambientLight);
+      const gridHelper = new THREE.GridHelper(10, 10);
+      scene.add(gridHelper);
+      camera.position.z = 5;
+
+      function animate() {
+        requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      function addPeer(id, name) {
+        if (peers[id]) return;
+        const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        const material = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+        const cube = new THREE.Mesh(geometry, material);
+        cube.userData = { name };
+        peers[id] = cube;
+        scene.add(cube);
+      }
+
+      function removePeer(id) {
+        const obj = peers[id];
+        if (obj) {
+          scene.remove(obj);
+          delete peers[id];
+        }
+      }
+
+      function updatePeerPosition(id, x, y, z) {
+        const obj = peers[id];
+        if (obj) {
+          obj.position.set(x, y, z);
+        }
+      }
+
+      document.getElementById('joinBtn').addEventListener('click', () => {
+        const name = document.getElementById('nameInput').value.trim();
+        if (!name) return;
+        socket = new WebSocket(`ws://${location.hostname}:3000`);
+        socket.addEventListener('message', (event) => {
+          const data = JSON.parse(event.data);
+          if (data.type === 'welcome') {
+            clientId = data.id;
+          } else if (data.type === 'join') {
+            addPeer(data.id, data.name);
+          } else if (data.type === 'move') {
+            updatePeerPosition(data.id, data.x, data.y, data.z);
+          } else if (data.type === 'leave') {
+            removePeer(data.id);
+          }
+        });
+        socket.addEventListener('open', () => {
+          // hide overlay
+          document.getElementById('overlay').style.display = 'none';
+          // send join event
+          socket.send(JSON.stringify({ type: 'join', name }));
+        });
+        // handle mouse movement to send position updates
+        document.addEventListener('mousemove', (e) => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          // map mouse position to world coords
+          const rect = renderer.domElement.getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          const vector = new THREE.Vector3(x, y, 0.5).unproject(camera);
+          socket.send(JSON.stringify({ type: 'move', x: vector.x, y: vector.y, z: vector.z }));
+          // update own representation locally
+          updatePeerPosition(clientId, vector.x, vector.y, vector.z);
+        });
+      });
+    </script>
+</body>
+</html>
